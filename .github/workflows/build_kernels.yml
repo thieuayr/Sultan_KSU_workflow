@@ -28,16 +28,17 @@ jobs:
         build:
 #          - type: Normal
 #            ksu: false
+#            exclude: susfs
 #            ak3_suffix: ""
-          - type: KSU
-            ksu: true
-            repo: "tiann/KernelSU"
-            folder: "KernelSU"
-            branch: "main"
-            kernel_patches: "../james_patches/next/next_hooks.patch"
-            extra_configs: "CONFIG_KPROBES=n"
-            susfs_patch: "../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-            ak3_suffix: "_KSU"
+#          - type: KSU
+#            ksu: true
+#            repo: "tiann/KernelSU"
+#            folder: "KernelSU"
+#            branch: "main"
+#            kernel_patches: "../james_patches/next/next_hooks.patch"
+#            extra_configs: "CONFIG_KPROBES=n"
+#            susfs_ksu_patches: "../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+#            ak3_suffix: "_KSU"
           - type: KSUN
             ksu: true
             repo: "KernelSU-Next/KernelSU-Next"
@@ -48,7 +49,6 @@ jobs:
             ksu_patches: "KSUN/WildJames-Manager.patch"
             kernel_patches: "../james_patches/sultan/syscall_hooks.patch"
             extra_configs: "CONFIG_KSU_KPROBES_HOOK=n"
-#            susfs_patch: "sultan/KSUN/KSUN-SUSFS-1.5.12.patch"
             ak3_suffix: "_KSUNext"
           - type: RKSU
             ksu: true
@@ -56,27 +56,37 @@ jobs:
             folder: "KernelSU"
             branch: "main"
             susfs_branch: "susfs-main"
-            kernel_patches: "../james_patches/sultan/syscall_hooks.patch"
+            kernel_patches: "../james_patches/sultan/syscall_hooks.patch" 
+            susfsless_kernel_patches: "sultan/reboot-hook.patch"
             extra_configs: "CONFIG_KSU_MANUAL_HOOK=y"
-#            susfs_patch: "sultan/RKSU/RKSU-SUSFS-1.5.12.patch"
             ak3_suffix: "_RKSU"
           - type: SukiSU
             ksu: true
             repo: "SukiSU-Ultra/SukiSU-Ultra"
             folder: "KernelSU"
-            branch: "nongki"
+            branch: "main"
             susfs_branch: "susfs-main"
-            ksu_patches: "../fix_list_count_nodes_indent.patch"
-            kernel_patches: "../james_patches/sultan/syscall_hooks.patch"
+            kernel_patches: "sultan/scope-min-hooks-v1.6.patch"
             extra_configs: "CONFIG_KSU_MANUAL_HOOK=y CONFIG_KSU_MANUAL_SU=n CONFIG_COMPAT=y CONFIG_ZRAM_GS_WRITEBACK=y"
             ak3_suffix: "_SukiSU"
             # kpm: "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+          - type: xxKSU
+            ksu: true
+            exclude: susfs
+            repo: "backslashxx/KernelSU"
+            folder: "KernelSU"
+            branch: "master"
+            kernel_patches: "sultan/scope-min-hooks-v1.6.patch"
+            ak3_suffix: "_xxKSU"
 
         susfs: [false, true]
         exclude:
           - build:
-              ksu: false
+              exclude: susfs
             susfs: true
+          - build:
+              exclude: susfsless
+            susfs: false
 
     steps:
       - name: Download and extract GCC 14.2.0 toolchain
@@ -109,7 +119,6 @@ jobs:
           echo "kernel_dir=$PWD/sultan" >> $GITHUB_ENV
           git clone --depth=1 https://github.com/TheSillyOk/kernel_ls_patches ok_patches
           echo "ok_dir=$PWD/ok_patches" >> $GITHUB_ENV
-          curl "https://gist.githubusercontent.com/MiRinChan/87371b65f283bb031d80e55b16b6d7ad/raw/6b82ef649188c1f0f593b0cd8a5146c5e4fd0114/fix_list_count_nodes_indent.patch" > fix_list_count_nodes_indent.patch
 
           ${{ matrix.susfs || false }} && ksu_repo="${{ matrix.build.susfs_repo || matrix.build.repo }}" || ksu_repo="${{ matrix.build.repo }}" || true
           echo "ksu_repo=$ksu_repo" >> $GITHUB_ENV
@@ -145,8 +154,12 @@ jobs:
           done
 
           sed -i 's/${LOCALVERSION+set}/set/' ${{ env.kernel_dir }}/scripts/setlocalversion
-          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="${{ matrix.kernel.local_version }}"/' ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
-          perl -pi -e 's/build-timestamp = \$\(or \$\(KBUILD_BUILD_TIMESTAMP\), \$\(build-timestamp-auto\)\)/build-timestamp = "${{ matrix.kernel.build_date }}"/' ${{ env.kernel_dir }}/init/Makefile
+          if [[ -n "${{ matrix.kernel.local_version }}" ]]; then
+            sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="${{ matrix.kernel.local_version }}"/' ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
+          fi
+          if [[ -n "${{ matrix.kernel.build_date }}" ]]; then
+            perl -pi -e 's/build-timestamp = \$\(or \$\(KBUILD_BUILD_TIMESTAMP\), \$\(build-timestamp-auto\)\)/build-timestamp = "${{ matrix.kernel.build_date }}"/' ${{ env.kernel_dir }}/init/Makefile
+          fi
 
       - name: Add KernelSU (${{ matrix.build.type }})
         if: matrix.build.ksu
@@ -159,6 +172,20 @@ jobs:
             cd "${{ matrix.build.folder }}" && git checkout "${{ matrix.build.checkout }}" && cd -
           fi
 
+          if [[ -n "${{ matrix.build.susfsless_kernel_patches }}" && "${{ matrix.susfs }}" != "true" ]]; then
+            for patch_name in ${{ matrix.build.susfsless_kernel_patches }}; do
+              patch -p1 -F 3 < "${{ env.ok_dir }}/${patch_name}"
+            done
+          fi
+
+          if [[ -n "${{ matrix.build.susfsless_ksu_patches }}" && "${{ matrix.susfs }}" != "true" ]]; then
+            cd "${{ matrix.build.folder }}"
+            for patch_name in ${{ matrix.build.susfsless_ksu_patches }}; do
+              patch -p1 < "${{ env.ok_dir }}/${patch_name}"
+            done
+            cd "${{ env.kernel_dir }}"
+          fi
+
           if [[ -n "${{ matrix.build.ksu_patches }}" ]]; then
             cd "${{ matrix.build.folder }}"
             for patch_name in ${{ matrix.build.ksu_patches }}; do
@@ -167,32 +194,49 @@ jobs:
             cd "${{ env.kernel_dir }}"
           fi
 
-          # Add KSU configuration settings
-          echo "CONFIG_KSU=y" >> ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
-          echo "CONFIG_KSU_KPROBES_HOOK=n" >> ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
+          if [[ -n "${{ matrix.build.susfsless_configs }}" && "${{ matrix.susfs }}" != "true" ]]; then
+            for config in ${{ matrix.build.susfsless_configs }}; do
+              echo "--> Added ${config} <--"
+              config_name=$(echo "${config}" | cut -d "=" -f 1)
+              sed -i -E 's/.*($config_name=.*)/# \1/gi' ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
+              echo -e "\n${config}" >> "${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}"
+            done
+          fi
 
       - name: Apply SUSFS Patches
         if: matrix.susfs
         run: |
 
-          # Copy SUSFS patches
           cp ${{ env.susfs_dir }}/kernel_patches/50_add_susfs_in_gki-${{ matrix.kernel.android_version }}-${{ matrix.kernel.kernel_version }}.patch ${{ env.kernel_dir }}/
           cp ${{ env.susfs_dir }}/kernel_patches/fs/* ${{ env.kernel_dir }}/fs/
           cp ${{ env.susfs_dir }}/kernel_patches/include/linux/* ${{ env.kernel_dir }}/include/linux/
 
-          if [[ -n "${{ matrix.build.susfs_patch }}" ]]; then
+          if [[ -n "${{ matrix.build.susfs_ksu_patches }}" ]]; then
             cd "${{ env.kernel_dir }}/${{ matrix.build.folder }}"
-            patch -p1 --forward < ${{ env.ok_dir }}/${{ matrix.build.susfs_patch }}
+            for patch_name in ${{ matrix.build.susfs_ksu_patches }}; do
+              patch -p1 -F 3 < "${{ env.ok_dir }}/${patch_name}"
+            done
+          fi
+
+          if [[ -n "${{ matrix.build.susfs_kernel_patches }}" ]]; then
+            for patch_name in ${{ matrix.build.susfs_kernel_patches }}; do
+              patch -p1 -F 3 < "${{ env.ok_dir }}/${patch_name}"
+            done
+            cd "${{ env.kernel_dir }}"
           fi
 
           cd "${{ env.kernel_dir }}"
           patch -p1 < 50_add_susfs_in_gki-${{ matrix.kernel.android_version }}-${{ matrix.kernel.kernel_version }}.patch || true
           patch -p1 --fuzz=3 < ${{ env.james_dir }}/sultan/sys.c_fix.patch
 
-          # Add SUSFS configuration settings
-          echo "CONFIG_KSU_SUSFS=y" >> ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
-          echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
-          echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
+          if [[ -n "${{ matrix.build.susfs_configs }}" ]]; then
+            for config in ${{ matrix.build.susfs_configs }}; do
+              echo "--> Added ${config} <--"
+              config_name=$(echo "${config}" | cut -d "=" -f 1)
+              sed -i -E 's/.*($config_name=.*)/# \1/gi' ${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}
+              echo -e "\n${config}" >> "${{ env.kernel_dir }}/arch/arm64/configs/${{ matrix.kernel.defconfig }}"
+            done
+          fi
 
       - name: Cache Kernel Build
         uses: actions/cache@v4
@@ -294,26 +338,25 @@ jobs:
           KSUN_URL=$(git ls-remote https://github.com/KernelSU-Next/KernelSU-Next.git next | awk '{print "https://github.com/KernelSU-Next/KernelSU-Next/commit/"$1}')
           RKSU_URL=$(git ls-remote https://github.com/rsuntk/KernelSU HEAD | awk '{print "https://github.com/rsuntk/KernelSU/commit/"$1}')
           SUKI_URL=$(git ls-remote https://github.com/SukiSU-Ultra/SukiSU-Ultra HEAD | awk '{print "https://github.com/SukiSU-Ultra/SukiSU-Ultra/commit/"$1}')
+          xxKSU_URL=$(git ls-remote https://github.com/backslashxx/KernelSU HEAD | awk '{print "https://github.com/backslashxx/KernelSU/commit/"$1}')
           echo "KSU_URL=$KSU_URL" >> $GITHUB_ENV
           echo "KSUN_URL=$KSUN_URL" >> $GITHUB_ENV
           echo "RKSU_URL=$RKSU_URL" >> $GITHUB_ENV
           echo "SUKI_URL=$SUKI_URL" >> $GITHUB_ENV
+          echo "xxKSU_URL=$xxKSU_URL" >> $GITHUB_ENV
 
           echo "KSU_V=$(./sh/get_ksuver.sh "tiann" "KernelSU" "main")" >> $GITHUB_ENV
           echo "KSUN_V=$(./sh/get_ksuver.sh "KernelSU-Next" "KernelSU-Next" "next")" >> $GITHUB_ENV
           echo "RKSU_V=$(./sh/get_ksuver.sh "rsuntk" "KernelSU" "main")" >> $GITHUB_ENV
-          echo "SUKI_V=$(./sh/extract_ksuver.sh "https://github.com/SukiSU-Ultra/SukiSU-Ultra" "kernel/Makefile" "." "main")" >> $GITHUB_ENV
+          echo "SUKI_V=$(./sh/get_ksuver.sh "SukiSU-Ultra" "SukiSU-Ultra" "main")" >> $GITHUB_ENV
+          echo "xxKSU_V=$(./sh/get_ksuver.sh "backslashxx" "KernelSU" "master")" >> $GITHUB_ENV
 
       - name: Generate Release Body
         id: release_body
         run: |
           cat << EOF > release_body.md
           ⚠️ **COMPATIBILITY NOTICE** ⚠️
-          Please ensure compatibility by comparing release dates with official Sultan kernel releases:
-          - Check official Sultan releases: https://github.com/kerneltoast/android_kernel_google_gs201/releases
-          - This build is based on the latest Sultan kernel commits as of build date
-          - Always verify your device's Android version matches the kernel target (Android 14)
-          - Recommended to use kernels released within 30 days of official Sultan updates
+          Please ensure compatibility by comparing release dates with official Sultan kernel releases
           
           Module:
           -> https://github.com/sidex15/ksu_module_susfs
@@ -322,12 +365,14 @@ jobs:
           -> https://github.com/WildKernels/Wild_KSU
           -> https://github.com/KernelSU-Next/KernelSU-Next
           -> https://github.com/rsuntk/KernelSU
+          -> https://github.com/SukiSU-Ultra/SukiSU-Ultra
+          -> https://github.com/backslashxx/KernelSU/releases / https://t.me/kowsu_build
           
           Features:
-          [+] KSU [${{ env.KSU_V }}](${{ env.KSU_URL }})
           [+] KSUN [${{ env.KSUN_V }}](${{ env.KSUN_URL }}) + WKSU Manager
           [+] RKSU [${{ env.RKSU_V }}](${{ env.RKSU_URL }})
           [+] SukiSU [${{ env.SUKI_V }}](${{ env.SUKI_URL }})
+          [+] xxKSU [${{ env.xxKSU_V }}](${{ env.xxKSU_URL }})
           [+] SUSFS v1.5.12
           EOF
 
